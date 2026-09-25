@@ -1,36 +1,49 @@
 import os
 import numpy as np
-from sklearn.svm import OneClassSVM
-from micromlgen import port
 
-# تحديد مسار المجلد الحالي للمشروع بدقة
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CSV_PATH = os.path.join(BASE_DIR, "my_keystrokes.csv")
 OUTPUT_HEADER_PATH = os.path.join(BASE_DIR, "model.h")
 
-# 1. التحقق من وجود ملف البيانات
-if not os.path.exists(CSV_PATH):
-    # في حال تم حفظه بالخطأ في مسار التيرمنال، نبحث عنه هناك
-    if os.path.exists("my_keystrokes.csv"):
-        CSV_PATH = "my_keystrokes.csv"
-    else:
-        raise FileNotFoundError(f"Could not find 'my_keystrokes.csv'. Please make sure it exists in: {BASE_DIR}")
 
-print(f"Loading data from: {CSV_PATH}")
 X = np.genfromtxt(CSV_PATH, delimiter=',')
+if X.ndim == 1:
+    X = np.expand_dims(X, axis=0)
+X = X[:, :15]
 
-# 2. تدريب النموذج مع تحديد gamma كرقم عشري صريح
-# micromlgen يتطلب قيمة float صريحة لـ gamma
-clf = OneClassSVM(kernel='rbf', gamma=0.01, nu=0.1)
-clf.fit(X)
+mins = np.min(X, axis=0)
+maxs = np.max(X, axis=0)
 
-# 3. تصدير النموذج إلى C++
-c_code = port(clf, class_name="KeystrokeClassifier")
+tolerance = 0.35
+lower_bounds = mins * (1.0 - tolerance)
+upper_bounds = maxs * (1.0 + tolerance)
+
+header_content = f"""#pragma once
+
+class KeystrokeBaseline {{
+public:
+    const float lower_bounds[15] = {{
+        {", ".join([f"{val:.6f}f" for val in lower_bounds])}
+    }};
+
+    const float upper_bounds[15] = {{
+        {", ".join([f"{val:.6f}f" for val in upper_bounds])}
+    }};
+
+    int predict(float *x) {{
+        for (int i = 0; i < 15; i++) {{
+            if (x[i] < lower_bounds[i] || x[i] > upper_bounds[i]) {{
+                return 0; 
+            }}
+        }}
+        return 1; 
+    }}
+}};
+"""
 
 with open(OUTPUT_HEADER_PATH, 'w') as f:
-    f.write(c_code)
+    f.write(header_content)
 
 print("=" * 60)
-print(f"[SUCCESS] 'model.h' has been created successfully!")
-print(f"File location: {OUTPUT_HEADER_PATH}")
+print("[SUCCESS] New precise bounding model generated!")
 print("=" * 60)

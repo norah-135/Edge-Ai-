@@ -1,9 +1,14 @@
+import os
 import time
 import csv
 from pynput import keyboard
 
 TARGET_WORD = "pnu12345"
 SAMPLES_COUNT = 10
+
+# حفظ الملف داخل نفس مجلد السكربت لتفادي أخطاء مسار VS Code
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CSV_PATH = os.path.join(BASE_DIR, "my_keystrokes.csv")
 
 dataset = []
 current_input = []
@@ -23,9 +28,7 @@ AR_TO_EN = {
 }
 
 def normalize_char(k):
-    if k in AR_TO_EN:
-        return AR_TO_EN[k]
-    return k
+    return AR_TO_EN.get(k, k)
 
 def on_press(key):
     if key in [keyboard.Key.shift, keyboard.Key.shift_r, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r, keyboard.Key.alt_l, keyboard.Key.alt_r]:
@@ -70,13 +73,18 @@ def on_release(key):
         
         if entered_word == TARGET_WORD:
             features = []
+            # 8 أوقات ضغط (Hold Times)
             for i in range(len(TARGET_WORD)):
                 features.append(current_input[i]['hold'])
+            # 7 أوقات انتقال (Flight Times)
             for i in range(len(TARGET_WORD) - 1):
                 f_time = current_input[i+1]['press'] - current_input[i]['release']
                 features.append(f_time)
-                
+            
+            # التأكد من حفظ 15 ميزة بالضبط
+            features = features[:15]
             dataset.append(features)
+            
             print(f"\n[SUCCESS] Recorded attempt {len(dataset)}/{SAMPLES_COUNT} -> '{entered_word}'")
             
             if len(dataset) < SAMPLES_COUNT:
@@ -85,6 +93,8 @@ def on_release(key):
             print(f"\n[ERROR] Typed: '{entered_word}' | Expected: '{TARGET_WORD}'. Try again.")
             
         current_input = []
+        press_times.clear()
+        
         if len(dataset) >= SAMPLES_COUNT:
             return False
     else:
@@ -96,10 +106,11 @@ def on_release(key):
 with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
     listener.join()
 
-with open("my_keystrokes.csv", "w", newline="") as f:
+# حفظ البيانات المحدثة
+with open(CSV_PATH, "w", newline="") as f:
     writer = csv.writer(f)
     writer.writerows(dataset)
 
 print("\n" + "=" * 60)
-print(f"[COMPLETED] All {SAMPLES_COUNT} samples saved successfully to 'my_keystrokes.csv'!")
+print(f"[COMPLETED] All {SAMPLES_COUNT} samples saved successfully to:\n{CSV_PATH}")
 print("=" * 60)
