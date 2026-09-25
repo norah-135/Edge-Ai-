@@ -16,7 +16,6 @@ void loop() {
       input_features[i] = Serial.parseFloat();
     }
 
-    // تنظيف البافر
     while (Serial.available() > 0) {
       Serial.read();
     }
@@ -25,7 +24,6 @@ void loop() {
 
     if (result == 0) {
       Serial.println("[WARNING] Intruder rhythm detected! Out of bounds timing.");
-      // وميض تحذيري بالليد
       for (int i = 0; i < 5; i++) {
         digitalWrite(LED_BUILTIN, HIGH);
         delay(80);

@@ -6,7 +6,6 @@ from pynput import keyboard
 TARGET_WORD = "pnu12345"
 SAMPLES_COUNT = 10
 
-# حفظ الملف داخل نفس مجلد السكربت لتفادي أخطاء مسار VS Code
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CSV_PATH = os.path.join(BASE_DIR, "my_keystrokes.csv")
 
@@ -106,7 +105,6 @@ def on_release(key):
 with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
     listener.join()
 
-# حفظ البيانات المحدثة
 with open(CSV_PATH, "w", newline="") as f:
     writer = csv.writer(f)
     writer.writerows(dataset)
