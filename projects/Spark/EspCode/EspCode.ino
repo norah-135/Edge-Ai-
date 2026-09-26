@@ -7,26 +7,22 @@
 #define I2S_SD  32
 #define I2S_PORT I2S_NUM_0
 
-// مصفوفة استقبال الصوت للنموذج
-static int16_t sample_buffer[EI_CLASSIFIER_RAW_SAMPLE_COUNT];
+// مصفوفة استيعاب ثانية كاملة للنموذج
+static int16_t inference_buffer[EI_CLASSIFIER_RAW_SAMPLE_COUNT];
 
-// دالة تحويل إشارة الصوت إلى النموذج
+// دالة تمرير البيانات للنموذج
 static int microphone_audio_signal_get_data(size_t offset, size_t length, float *out_ptr) {
-    for (size_t i = 0; i < length; i++) {
-        out_ptr[i] = (float)sample_buffer[offset + i];
-    }
+    numpy::int16_to_float(&inference_buffer[offset], out_ptr, length);
     return 0;
 }
 
 void setup() {
-    // رفع سرعة الباود ريت
     Serial.begin(921600);
-    delay(1000); // مهلة زمنية لتثبيت السيريال ومنع تشوه البداية
+    delay(1000);
 
     pinMode(LED_BUILTIN, OUTPUT);
     digitalWrite(LED_BUILTIN, LOW);
 
-    // إعداد I2S للمايك
     const i2s_config_t i2s_config = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
         .sample_rate = 16000,
@@ -49,33 +45,42 @@ void setup() {
     i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL);
     i2s_set_pin(I2S_PORT, &pin_config);
 
-    Serial.println("\n--- Spark Detector Started Successfully (921600 baud) ---");
+    Serial.println("\n--- Spark Detector Started (Ready) ---");
 }
 
 void loop() {
     size_t bytes_read = 0;
-    int32_t raw_sample = 0;
+    int32_t temp_raw[256];
+    int samples_collected = 0;
 
-    // تجميع عينات الصوت
-    for (int i = 0; i < EI_CLASSIFIER_RAW_SAMPLE_COUNT; i++) {
-        i2s_read(I2S_PORT, &raw_sample, sizeof(raw_sample), &bytes_read, portMAX_DELAY);
-        sample_buffer[i] = (int16_t)(raw_sample >> 14);
+    // تجميع ثانية كاملة عبر دفعات صغيرة لتفادي ضغط الذاكرة
+    while (samples_collected < EI_CLASSIFIER_RAW_SAMPLE_COUNT) {
+        int to_read = min((int)(sizeof(temp_raw) / sizeof(temp_raw[0])), 
+                          (int)(EI_CLASSIFIER_RAW_SAMPLE_COUNT - samples_collected));
+        
+        i2s_read(I2S_PORT, temp_raw, to_read * sizeof(int32_t), &bytes_read, portMAX_DELAY);
+        int read_count = bytes_read / sizeof(int32_t);
+
+        for (int i = 0; i < read_count; i++) {
+            inference_buffer[samples_collected + i] = (int16_t)(temp_raw[i] >> 14);
+        }
+        samples_collected += read_count;
     }
 
-    // تغليف الإشارة للنموذج
+    // تجهيز الإشارة
     signal_t signal;
     signal.total_length = EI_CLASSIFIER_RAW_SAMPLE_COUNT;
     signal.get_data = &microphone_audio_signal_get_data;
 
-    // استنتاج النموذج
+    // تشغيل الاستنتاج
     ei_impulse_result_t result = { 0 };
     EI_IMPULSE_ERROR r = run_classifier(&signal, &result, false);
     if (r != EI_IMPULSE_OK) {
-        Serial.printf("Classifier Error: %d\n", r);
+        Serial.printf("Run classifier error: %d\n", r);
         return;
     }
 
-    // استخراج النتائج
+    // استخراج الاحتمالات
     float spark_val = 0.0;
     float noise_val = 0.0;
 
@@ -87,14 +92,12 @@ void loop() {
         }
     }
 
-    // طباعة نظيفة للنتائج بدون أي رموز غريبة
-    Serial.printf("Predictions -> Noise: %.2f%% | Spark: %.2f%%", noise_val * 100.0, spark_val * 100.0);
+    Serial.printf("Noise: %.1f%% | Spark: %.1f%%", noise_val * 100.0, spark_val * 100.0);
 
-    // إنذار في حال رصد الشرارة
-    if (spark_val >= 0.80) {
+    if (spark_val >= 0.70) {
         Serial.print("  ===> [FIRE ALERT: SPARK DETECTED!]");
         digitalWrite(LED_BUILTIN, HIGH);
-        delay(150);
+        delay(120);
         digitalWrite(LED_BUILTIN, LOW);
     }
     Serial.println();
