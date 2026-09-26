@@ -1,24 +1,23 @@
 #include <Spark_inferencing.h>
 #include <driver/i2s.h>
 
-// منافذ ESP32 NodeMCU
 #define I2S_SCK 33
 #define I2S_WS  25
 #define I2S_SD  32
 #define I2S_PORT I2S_NUM_0
 
-// مصفوفة استيعاب ثانية كاملة للنموذج
 static int16_t inference_buffer[EI_CLASSIFIER_RAW_SAMPLE_COUNT];
 
-// دالة تمرير البيانات للنموذج
-static int microphone_audio_signal_get_data(size_t offset, size_t length, float *out_ptr) {
-    numpy::int16_to_float(&inference_buffer[offset], out_ptr, length);
+static int get_audio_signal_data(size_t offset, size_t length, float *out_ptr) {
+    for (size_t i = 0; i < length; i++) {
+        out_ptr[i] = (float)inference_buffer[offset + i];
+    }
     return 0;
 }
 
 void setup() {
     Serial.begin(921600);
-    delay(1000);
+    delay(500);
 
     pinMode(LED_BUILTIN, OUTPUT);
     digitalWrite(LED_BUILTIN, LOW);
@@ -45,60 +44,40 @@ void setup() {
     i2s_driver_install(I2S_PORT, &i2s_config, 0, NULL);
     i2s_set_pin(I2S_PORT, &pin_config);
 
-    Serial.println("\n--- Spark Detector Started (Ready) ---");
+    Serial.println("\n--- Raw Classes Diagnostic Mode ---");
 }
 
 void loop() {
     size_t bytes_read = 0;
-    int32_t temp_raw[256];
-    int samples_collected = 0;
+    int32_t dma_chunk[256];
+    int collected = 0;
 
-    // تجميع ثانية كاملة عبر دفعات صغيرة لتفادي ضغط الذاكرة
-    while (samples_collected < EI_CLASSIFIER_RAW_SAMPLE_COUNT) {
-        int to_read = min((int)(sizeof(temp_raw) / sizeof(temp_raw[0])), 
-                          (int)(EI_CLASSIFIER_RAW_SAMPLE_COUNT - samples_collected));
+    while (collected < EI_CLASSIFIER_RAW_SAMPLE_COUNT) {
+        int chunk_size = min(256, (int)(EI_CLASSIFIER_RAW_SAMPLE_COUNT - collected));
+        i2s_read(I2S_PORT, dma_chunk, chunk_size * sizeof(int32_t), &bytes_read, portMAX_DELAY);
         
-        i2s_read(I2S_PORT, temp_raw, to_read * sizeof(int32_t), &bytes_read, portMAX_DELAY);
-        int read_count = bytes_read / sizeof(int32_t);
-
-        for (int i = 0; i < read_count; i++) {
-            inference_buffer[samples_collected + i] = (int16_t)(temp_raw[i] >> 14);
+        int samples_read = bytes_read / sizeof(int32_t);
+        for (int i = 0; i < samples_read; i++) {
+            int32_t val = dma_chunk[i] >> 14;
+            if (val > 32767) val = 32767;
+            if (val < -32768) val = -32768;
+            inference_buffer[collected + i] = (int16_t)val;
         }
-        samples_collected += read_count;
+        collected += samples_read;
     }
 
-    // تجهيز الإشارة
     signal_t signal;
     signal.total_length = EI_CLASSIFIER_RAW_SAMPLE_COUNT;
-    signal.get_data = &microphone_audio_signal_get_data;
+    signal.get_data = &get_audio_signal_data;
 
-    // تشغيل الاستنتاج
     ei_impulse_result_t result = { 0 };
     EI_IMPULSE_ERROR r = run_classifier(&signal, &result, false);
-    if (r != EI_IMPULSE_OK) {
-        Serial.printf("Run classifier error: %d\n", r);
-        return;
-    }
+    if (r != EI_IMPULSE_OK) return;
 
-    // استخراج الاحتمالات
-    float spark_val = 0.0;
-    float noise_val = 0.0;
-
+    // طباعة كل مخرجات النموذج الفعلية
+    Serial.print("Model Output -> ");
     for (size_t ix = 0; ix < EI_CLASSIFIER_LABEL_COUNT; ix++) {
-        if (strcmp(result.classification[ix].label, "spark") == 0) {
-            spark_val = result.classification[ix].value;
-        } else if (strcmp(result.classification[ix].label, "noise") == 0) {
-            noise_val = result.classification[ix].value;
-        }
-    }
-
-    Serial.printf("Noise: %.1f%% | Spark: %.1f%%", noise_val * 100.0, spark_val * 100.0);
-
-    if (spark_val >= 0.70) {
-        Serial.print("  ===> [FIRE ALERT: SPARK DETECTED!]");
-        digitalWrite(LED_BUILTIN, HIGH);
-        delay(120);
-        digitalWrite(LED_BUILTIN, LOW);
+        Serial.printf("[%s: %.1f%%] ", result.classification[ix].label, result.classification[ix].value * 100.0);
     }
     Serial.println();
 }
